@@ -1,0 +1,383 @@
+{
+  "name": "Triage de Consultas IA - Cabañas La Alfonsina",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": { "item": [{ "mode": "everyMinute" }] },
+        "simple": false,
+        "filters": { "q": "to:autoprueban8n@gmail.com -from:claude.com -from:anthropic.com -subject:\"Aprobación requerida\" -subject:\"Re: consulta\" -subject:\"Error en el flujo\"" },
+        "options": {}
+      },
+      "id": "2e8dfe2a-b455-42ce-bd89-3c194a3efe08",
+      "name": "Gmail Trigger (From now on)",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [-3616, 320],
+      "credentials": { "gmailOAuth2": { "id": "OlDbdrvmu1pIQO36", "name": "Gmail account" } }
+    },
+    {
+      "parameters": {
+        "values": { "string": [
+          { "name": "remitente", "value": "={{ $json.from.value[0].name + \" <\" + $json.from.value[0].address + \">\" }}" },
+          { "name": "mensaje", "value": "={{ $json.text.slice(0, 1900) }}" },
+          { "name": "thread_id", "value": "={{ $json.threadId }}" },
+          { "name": "asunto", "value": "={{ $json.subject }}" }
+        ] },
+        "options": {}
+      },
+      "id": "55474aa1-4136-4ff9-b23d-c2f416d52b2e",
+      "name": "Normalizar mensaje",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [-3408, 320]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "value": "3d1551c50c5880f8b16eee64e2e04183", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Estado|select", "selectValue": "26363e1e-c9dc-4d0b-8b58-14bb0abeae03" },
+          { "key": "Remitente|rich_text", "textContent": "={{ $json.remitente }}" },
+          { "key": "Mensaje original|rich_text", "textContent": "={{ $json.mensaje }}" },
+          { "key": "Thread ID|rich_text", "textContent": "={{ $json.thread_id }}" }
+        ] },
+        "options": {}
+      },
+      "id": "d57a4c12-be36-4053-ba67-8057a05d816a",
+      "name": "Notion - Crear Consulta (Pendiente)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-3200, 320],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {
+        "conditions": { "string": [
+          { "value1": "={{ $('Normalizar mensaje').item.json.mensaje }}", "operation": "isNotEmpty" },
+          { "value1": "={{ $('Normalizar mensaje').item.json.asunto }}", "operation": "notContains", "value2": "Aprobación requerida" },
+          { "value1": "={{ $('Normalizar mensaje').item.json.asunto }}", "operation": "notContains", "value2": "Re: consulta" },
+          { "value1": "={{ $('Normalizar mensaje').item.json.asunto }}", "operation": "notContains", "value2": "Error en el flujo" }
+        ] }
+      },
+      "id": "12b4af68-e964-4475-9d7b-faf24ace7fd6",
+      "name": "Filtro anti-vacío",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [-3024, 320]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "value": "={{ $json.id }}", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Estado|select", "selectValue": "12fad4a1-69d1-431f-8b5f-245c4019e0f4" }
+        ] },
+        "options": {}
+      },
+      "id": "1ad2a6c3-151d-4ce2-b03b-13d8251e7bfc",
+      "name": "Notion - Descartar (mensaje vacío)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-2736, 416],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [
+          { "name": "anthropic-version", "value": "2023-06-01" },
+          { "name": "content-type", "value": "application/json" }
+        ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"claude-haiku-4-5-20251001\",\n  max_tokens: 300,\n  system: \"Sos el clasificador de consultas de huéspedes de Cabañas La Alfonsina. Clasificá cada mensaje en exactamente una categoría: Reclamo (queja, problema con una reserva pasada, o pedido de reembolso), Spam (no relacionado con una reserva: publicidad, mensaje vacío, bot), Estandar (todo lo demás, incluyendo cualquier consulta de disponibilidad o reserva). Devolvé SOLO JSON válido.\",\n  messages: [\n    {\n      role: \"user\",\n      content: \"Remitente: \" + $('Normalizar mensaje').item.json.remitente + \"\\nMensaje: \" + $('Normalizar mensaje').item.json.mensaje + \"\\n\\nDevolvé SOLO un JSON con: categoria, urgencia (1-5), resumen, respuesta_propuesta\"\n    }\n  ]\n}) }}",
+        "options": {}
+      },
+      "id": "c10d2530-7c09-487d-ab5a-7c45bb140ec1",
+      "name": "IA - Clasificar (Claude)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-2736, 240],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "continueOnFail": true,
+      "credentials": { "httpHeaderAuth": { "id": "0wKgyJmvNLtPZIht", "name": "Header Auth account" } }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            { "name": "categoria", "value": "={{ JSON.parse($json.content[0].text.replace(/```json|```/g, '').trim()).categoria }}" },
+            { "name": "resumen", "value": "={{ JSON.parse($json.content[0].text.replace(/```json|```/g, '').trim()).resumen }}" },
+            { "name": "respuesta_propuesta", "value": "={{ JSON.parse($json.content[0].text.replace(/```json|```/g, '').trim()).respuesta_propuesta }}" }
+          ],
+          "number": [
+            { "name": "urgencia", "value": "={{ JSON.parse($json.content[0].text.replace(/```json|```/g, '').trim()).urgencia }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3cdf4273-c829-4bbe-868a-9bafcbb3fa56",
+      "name": "Parsear respuesta IA",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [-2544, 240]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "value": "={{ $('Notion - Crear Consulta (Pendiente)').item.json.id }}", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Estado|select", "selectValue": "a0582588-f85d-4867-88f5-793748cc919d" },
+          { "key": "Urgencia|rich_text", "textContent": "={{ String($json.urgencia) }}" },
+          { "key": "Categoría IA|rich_text", "textContent": "={{ $json.categoria }}" }
+        ] },
+        "options": {}
+      },
+      "id": "4e951655-27c6-4510-ac3c-dae7d8ef2ed1",
+      "name": "Notion - Update (Procesado por IA)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-2368, 240],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$('Parsear respuesta IA').item.json.categoria.trim().toLowerCase()}}",
+        "rules": { "rules": [
+          { "value2": "reclamo" },
+          { "value2": "estandar", "output": 1 },
+          { "value2": "spam", "output": 2 }
+        ] },
+        "fallbackOutput": 2
+      },
+      "id": "c4e0a15f-dc53-4c60-9cb3-58dda688d8eb",
+      "name": "Router por Categoría",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [-2160, 288]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "value": "={{ $json.id }}", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Estado|select", "selectValue": "7e9476ac-0969-47c8-adbe-6f268ed10790" }
+        ] },
+        "options": {}
+      },
+      "id": "53d76441-d650-4713-8467-7d8639b7d2a1",
+      "name": "Notion - Update (Esperando Aprobación)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-1952, 144],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{$env.EMAIL_DUENO_ALFONSINA}}",
+        "subject": "={{ 'Aprobación requerida: consulta ' + $('Parsear respuesta IA').item.json.categoria + ' de ' + $('Normalizar mensaje').item.json.remitente }}",
+        "message": "={{ 'Nueva consulta ' + $('Parsear respuesta IA').item.json.categoria + ' de ' + $('Normalizar mensaje').item.json.remitente + '<br><br>Resumen: ' + $('Parsear respuesta IA').item.json.resumen + '<br><br><a href=\"' + $execution.resumeUrl + '&decision=Aprobado\">Aprobar</a> &nbsp;|&nbsp; <a href=\"' + $execution.resumeUrl + '&decision=Rechazado\">Rechazar</a>' }}",
+        "options": {}
+      },
+      "id": "b980006e-c268-4243-80c7-bb0de400050e",
+      "name": "Gmail - Enviar Aprobación (HITL)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [-1760, 144],
+      "webhookId": "025de428-9359-4930-a950-790d1e5a659e",
+      "credentials": { "gmailOAuth2": { "id": "OlDbdrvmu1pIQO36", "name": "Gmail account" } }
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "options": {}
+      },
+      "id": "29c38343-9d7b-4c26-83f0-a67988113e5f",
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [-1600, 144],
+      "webhookId": "4760f7b6-c598-409c-8884-bdf7a7fc349f"
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "value": "={{ $('Notion - Crear Consulta (Pendiente)').item.json.id }}", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Decisión|rich_text", "textContent": "={{ $('Wait').item.json.query.decision }}" }
+        ] },
+        "options": {}
+      },
+      "id": "63eb5c37-69f2-4838-ae64-495763a57127",
+      "name": "Notion - Update Decisión",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-1424, 144],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {
+        "conditions": { "string": [{ "value1": "={{$('Wait').item.json.query.decision}}", "operation": "equal", "value2": "Aprobado" }] }
+      },
+      "id": "6650e6f3-00ae-465a-8a6c-d593a3f00792",
+      "name": "IF - Aprobado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [-1232, 144]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{$('Normalizar mensaje').item.json.remitente}}",
+        "subject": "Re: consulta - Cabañas La Alfonsina",
+        "message": "={{ $('Parsear respuesta IA').item.json.respuesta_propuesta }}",
+        "options": {}
+      },
+      "id": "7af5be0d-9349-4c9f-b18c-56d1bcee4d55",
+      "name": "Gmail - Responder (Thread-Id)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [-1056, 288],
+      "webhookId": "c1c024af-7596-4e23-8c8b-7a4846cbb900",
+      "credentials": { "gmailOAuth2": { "id": "OlDbdrvmu1pIQO36", "name": "Gmail account" } }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "value": "={{ $('Notion - Crear Consulta (Pendiente)').item.json.id }}", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Estado|select", "selectValue": "2cf1c7d6-07eb-493f-8002-ddb103fb7dde" }
+        ] },
+        "options": {}
+      },
+      "id": "6b54c827-d969-4d41-950c-a3f1066afcd5",
+      "name": "Notion - Update (Enviado)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-864, 288],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "value": "={{ $('Notion - Crear Consulta (Pendiente)').item.json.id }}", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Estado|select", "selectValue": "12fad4a1-69d1-431f-8b5f-245c4019e0f4" }
+        ] },
+        "options": {}
+      },
+      "id": "556eb6aa-7ef0-413a-94c4-62631a82889d",
+      "name": "Notion - Descartar (Rechazado)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-992, 0],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "value": "={{ $json.id }}", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Estado|select", "selectValue": "12fad4a1-69d1-431f-8b5f-245c4019e0f4" }
+        ] },
+        "options": {}
+      },
+      "id": "addcce88-c745-4f50-bd92-d72bcf3f31f3",
+      "name": "Notion - Descartar (Spam)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-1920, 384],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {},
+      "id": "1b282f5d-75b5-4baa-b6be-70eb2c68b77f",
+      "name": "Error Trigger (workflow global)",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [-3616, 608]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "value": "3d2551c50c588012b814ea567f3ca692", "mode": "id" },
+        "propertiesUi": { "propertyValues": [
+          { "key": "Nodo Fallido|rich_text", "textContent": "={{ $json.execution.lastNodeExecuted }}" },
+          { "key": "Mensaje de error|rich_text", "textContent": "={{ $json.execution.error.message.slice(0,500) }}" },
+          { "key": "Estado del error|select", "selectValue": "e280d3d9-0e8e-4d5c-b053-7f55f5cb1717" }
+        ] },
+        "options": {}
+      },
+      "id": "7b3d83b8-1a5d-434a-8bc4-223df5302712",
+      "name": "Notion - Log Error",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [-3344, 608],
+      "credentials": { "notionApi": { "id": "EaiO5FeZoEQmZ9d7", "name": "Notion account" } }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{$env.EMAIL_DUENO_ALFONSINA}}",
+        "subject": "={{ 'Error en el flujo: ' + $json.execution.error.message.slice(0,80) }}",
+        "message": "={{ 'Falló el nodo ' + $json.execution.lastNodeExecuted + '. Mensaje: ' + $json.execution.error.message.slice(0,500) + '. Ver detalle en Notion (base Errores).' }}",
+        "options": {}
+      },
+      "id": "d5dd7558-e956-467c-a5d5-e5f47310a79f",
+      "name": "Gmail - Alerta Sistema (Error)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [-3088, 608],
+      "webhookId": "1490f402-55c6-4ba4-a26a-8c3b73581270",
+      "credentials": { "gmailOAuth2": { "id": "OlDbdrvmu1pIQO36", "name": "Gmail account" } }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger (From now on)": { "main": [[{ "node": "Normalizar mensaje", "type": "main", "index": 0 }]] },
+    "Normalizar mensaje": { "main": [[{ "node": "Notion - Crear Consulta (Pendiente)", "type": "main", "index": 0 }]] },
+    "Notion - Crear Consulta (Pendiente)": { "main": [[{ "node": "Filtro anti-vacío", "type": "main", "index": 0 }]] },
+    "Filtro anti-vacío": { "main": [
+      [{ "node": "IA - Clasificar (Claude)", "type": "main", "index": 0 }],
+      [{ "node": "Notion - Descartar (mensaje vacío)", "type": "main", "index": 0 }]
+    ] },
+    "IA - Clasificar (Claude)": { "main": [[{ "node": "Parsear respuesta IA", "type": "main", "index": 0 }]] },
+    "Parsear respuesta IA": { "main": [[{ "node": "Notion - Update (Procesado por IA)", "type": "main", "index": 0 }]] },
+    "Notion - Update (Procesado por IA)": { "main": [[{ "node": "Router por Categoría", "type": "main", "index": 0 }]] },
+    "Router por Categoría": { "main": [
+      [{ "node": "Notion - Update (Esperando Aprobación)", "type": "main", "index": 0 }],
+      [{ "node": "Gmail - Responder (Thread-Id)", "type": "main", "index": 0 }],
+      [{ "node": "Notion - Descartar (Spam)", "type": "main", "index": 0 }]
+    ] },
+    "Notion - Update (Esperando Aprobación)": { "main": [[{ "node": "Gmail - Enviar Aprobación (HITL)", "type": "main", "index": 0 }]] },
+    "Gmail - Enviar Aprobación (HITL)": { "main": [[{ "node": "Wait", "type": "main", "index": 0 }]] },
+    "Wait": { "main": [[{ "node": "Notion - Update Decisión", "type": "main", "index": 0 }]] },
+    "Notion - Update Decisión": { "main": [[{ "node": "IF - Aprobado?", "type": "main", "index": 0 }]] },
+    "IF - Aprobado?": { "main": [
+      [{ "node": "Gmail - Responder (Thread-Id)", "type": "main", "index": 0 }],
+      [{ "node": "Notion - Descartar (Rechazado)", "type": "main", "index": 0 }]
+    ] },
+    "Gmail - Responder (Thread-Id)": { "main": [[{ "node": "Notion - Update (Enviado)", "type": "main", "index": 0 }]] },
+    "Error Trigger (workflow global)": { "main": [[
+      { "node": "Notion - Log Error", "type": "main", "index": 0 },
+      { "node": "Gmail - Alerta Sistema (Error)", "type": "main", "index": 0 }
+    ]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "_nota": "Versión FINAL, probada en vivo de punta a punta la noche del 5 de septiembre 2026: las 3 categorías (Reclamo/Estandar/Spam), HITL (Aprobar y Rechazar), y el manejo de errores (Error Trigger → Notion Errores → alerta por Gmail) funcionaron correctamente. Bugs reales encontrados y corregidos durante el test de estrés: (1) el sistema se auto-disparaba al notificarse a sí mismo por mail — corregido con el filtro de asunto en 'Filtro anti-vacío'; (2) el Router no reconocía la categoría si la IA la devolvía con otra capitalización — corregido con .trim().toLowerCase(); (3) los datos del Error Trigger viven en $json.execution.error y $json.execution.lastNodeExecuted, no en $json.error directo; (4) Categoría IA, Urgencia y Decisión deben ser propiedades tipo Text en Notion (no Select/Number), por un bug de esta versión de n8n al guardar valores dinámicos en esos tipos. Antes de correr: cargar credenciales (Anthropic vía Header Auth con x-api-key, Notion, Gmail OAuth2), definir la variable de entorno EMAIL_DUENO_ALFONSINA, configurar en Workflow Settings → Error Workflow → este mismo workflow, y los IDs de opción de Estado deben coincidir con los de tu propia base Notion (si no, se reseleccionan desde el desplegable en cada nodo)."
+}
